@@ -108,13 +108,17 @@ def t_scale_over_one():
 def t_error_non_image():
     from dcv_vision import analyze_micrograph
 
-    try:
-        analyze_micrograph(b"this is not an image file at all")
-        check(False, "non-image bytes should raise ValueError")
-    except ValueError as e:
-        check("JPG or PNG" in str(e), f"non-image bytes error message: {e}")
-    except Exception as e:
-        check(False, f"wrong exception type for non-image bytes: {type(e).__name__}")
+    for label, payload in [
+        ("garbage bytes", b"this is not an image file at all"),
+        ("empty bytes", b""),  # cv2.imdecode raises cv2.error on this, not ValueError
+    ]:
+        try:
+            analyze_micrograph(payload)
+            check(False, f"{label} should raise ValueError")
+        except ValueError as e:
+            check("JPG or PNG" in str(e), f"{label} error message: {e}")
+        except Exception as e:
+            check(False, f"wrong exception type for {label}: {type(e).__name__}")
 
 
 def t_error_blank_image():
@@ -267,6 +271,12 @@ def t_endpoint_passthrough():
         files={"file": ("not_an_image.txt", b"hello world", "text/plain")},
     )
     check(bad.status_code == 400, f"non-image upload returns 400: {bad.status_code}")
+
+    empty = client.post(
+        "/analyze-microscope",
+        files={"file": ("empty.png", b"", "image/png")},
+    )
+    check(empty.status_code == 400, f"empty file returns 400, not a 500: {empty.status_code}")
 
 
 tests = [

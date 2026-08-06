@@ -89,6 +89,12 @@ def _too_large_error(w: int, h: int) -> ValueError:
 
 
 def analyze_micrograph(image_bytes: bytes) -> dict:
+    if not image_bytes:
+        # cv2.imdecode raises cv2.error (not ValueError) on an empty buffer —
+        # an unhandled type api.py's except clauses don't catch, so this has
+        # to be turned into our own ValueError before cv2 ever sees it.
+        raise ValueError("File must be a JPG or PNG image.")
+
     # Checked from the header alone, before cv2 touches the bytes at all —
     # this is the actual defense against a decompression-bomb upload (a
     # small file that decodes to a huge canvas). Checking dimensions after

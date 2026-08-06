@@ -131,7 +131,13 @@ around it.
   caps how much its own handler buffers. Neither one is a substitute for a
   body-size limit at the reverse proxy / platform level: a client that
   omits `Content-Length` (chunked transfer-encoding) or simply lies about
-  it isn't caught by either.
+  it isn't caught by either. `_peek_image_size`'s JPEG walk is also a known
+  ceiling: it can, in principle, be pointed at the wrong SOF marker by a
+  file that crafts its segment lengths so the parser and an actual JPEG
+  decoder disagree about where the real one is. The 10MB upload cap bounds
+  how bad that gets; a hard bound against a determined attacker would mean
+  decoding in a subprocess with a memory rlimit, which is more than this
+  repo's threat model calls for.
 
 ## Built with
 
