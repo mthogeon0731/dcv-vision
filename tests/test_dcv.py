@@ -148,6 +148,35 @@ def t_original_resolution():
     check(r["original_height"] == 300, f"original_height={r['original_height']}")
 
 
+def t_pixel_cap_rejected():
+    from dcv_vision import analyze_micrograph
+    from dcv_vision.config import MAX_IMAGE_PIXELS
+
+    side = int((MAX_IMAGE_PIXELS * 1.2) ** 0.5)  # comfortably over the cap
+    huge = np.full((side, side), 128, dtype=np.uint8)
+    ok, buf = cv2.imencode(".png", huge)
+    assert ok
+    try:
+        analyze_micrograph(buf.tobytes())
+        check(False, f"{side}x{side} image (> MAX_IMAGE_PIXELS) should be rejected before processing")
+    except ValueError as e:
+        check("too large" in str(e), f"oversized-image error message: {e}")
+
+
+def t_oversized_upload_rejected():
+    from fastapi.testclient import TestClient
+
+    from api import app, MAX_UPLOAD_BYTES
+
+    client = TestClient(app)
+    oversized = b"\x00" * (MAX_UPLOAD_BYTES + 1)
+    resp = client.post(
+        "/analyze-microscope",
+        files={"file": ("huge.png", oversized, "image/png")},
+    )
+    check(resp.status_code == 400, f"upload over MAX_UPLOAD_BYTES returns 400: {resp.status_code}")
+
+
 def t_endpoint_passthrough():
     from fastapi.testclient import TestClient
 
@@ -188,7 +217,9 @@ tests = [
     ("4b. error path (flat solid color -> 422-class)", t_error_blank_image),
     ("5. polarity symmetry (top-hat and black-hat both work)", t_polarity_symmetry),
     ("6. original resolution in response", t_original_resolution),
-    ("7. endpoint passthrough", t_endpoint_passthrough),
+    ("7. pixel cap rejects decompression-bomb-sized images", t_pixel_cap_rejected),
+    ("8. oversized upload rejected without buffering it all", t_oversized_upload_rejected),
+    ("9. endpoint passthrough", t_endpoint_passthrough),
 ]
 
 for name, fn in tests:

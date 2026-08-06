@@ -15,6 +15,7 @@ import numpy as np
 from dcv_vision.config import (
     GAUSSIAN_KERNEL,
     GRID_N,
+    MAX_IMAGE_PIXELS,
     MIN_PARTICLE_AREA_PX,
     MORPH_OPEN_KERNEL_PX,
     RESIZE_LONG_EDGE_PX,
@@ -62,6 +63,17 @@ def analyze_micrograph(image_bytes: bytes) -> dict:
     # resolution varied run to run, every pixel-unit kernel constant below
     # would be meaningless, so scale must be fixed before any kernel runs.
     orig_h, orig_w = img.shape[:2]
+
+    # Reject decompression-bomb-style images (a small file that decodes to a
+    # huge canvas) before resize/blur/morphology, which all scale with pixel
+    # count and would otherwise turn one oversized upload into a large CPU
+    # and memory spike.
+    if orig_h * orig_w > MAX_IMAGE_PIXELS:
+        raise ValueError(
+            f"Image is too large ({orig_w}x{orig_h} = {orig_h * orig_w:,}px, "
+            f"max {MAX_IMAGE_PIXELS:,}px)."
+        )
+
     resized = _resize_long_edge(img, RESIZE_LONG_EDGE_PX)
     blurred = cv2.GaussianBlur(resized, GAUSSIAN_KERNEL, 0)
 

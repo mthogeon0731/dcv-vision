@@ -65,9 +65,13 @@ fixtures: uniform → D_CV ≈ 0.003, clustered → D_CV ≈ 3.91.
 To try it over HTTP instead of calling the function directly:
 
 ```bash
-uvicorn api:app --reload
+uvicorn api:app --reload --host 127.0.0.1
 # POST an image file to http://localhost:8000/analyze-microscope
 ```
+
+`--reload` is for local development only. `api.py` has no auth and no rate
+limiting — it's safe to run against yourself, but don't expose it to the
+internet without putting auth and a rate limit in front of it.
 
 ## Tests
 
@@ -78,7 +82,8 @@ python tests/test_dcv.py
 No test framework required. Covers detection ordering (uniform < clustered),
 determinism, the unclipped-scale case, two error paths (non-image input,
 particle-free input), polarity symmetry (bright vs. dark particles resolve
-to the same D_CV), original-resolution passthrough, and the HTTP endpoint.
+to the same D_CV), original-resolution passthrough, the decompression-bomb
+pixel cap, the oversized-upload guard, and the HTTP endpoint.
 
 ## Use it on your own problem
 
@@ -106,6 +111,14 @@ around it.
   the source; treat them as a starting point for your own optics, not a
   calibrated constant.
 - **No batching.** One image in, one result out.
+- **Untrusted-upload guards, not a full hardening job.** `api.py` caps
+  upload size at 10MB, read in 1MB chunks so an oversized upload is
+  rejected without ever buffering the whole thing, and `analyze_micrograph`
+  rejects decoded images over 50 megapixels before doing any resize/blur/
+  morphology on them — that also sets OpenCV's own `OPENCV_IO_MAX_IMAGE_PIXELS`
+  guard, so a small file that decompresses into a huge canvas can be
+  refused at decode time. None of this substitutes for auth or a rate
+  limit in front of the endpoint.
 
 ## Built with
 

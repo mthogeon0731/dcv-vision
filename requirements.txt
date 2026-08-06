@@ -1,5 +1,5 @@
 fastapi>=0.115
 uvicorn[standard]>=0.32
-opencv-python-headless==4.10.0.84
+opencv-python-headless==4.14.0.94
 numpy>=1.26
 python-multipart>=0.0.9
