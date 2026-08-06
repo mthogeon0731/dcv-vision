@@ -71,7 +71,8 @@ uvicorn api:app --reload --host 127.0.0.1
 
 `--reload` is for local development only. `api.py` has no auth and no rate
 limiting — it's safe to run against yourself, but don't expose it to the
-internet without putting auth and a rate limit in front of it.
+internet without putting auth, a rate limit, and a body-size limit (e.g.
+nginx `client_max_body_size`) in front of it.
 
 ## Tests
 
@@ -82,8 +83,9 @@ python tests/test_dcv.py
 No test framework required. Covers detection ordering (uniform < clustered),
 determinism, the unclipped-scale case, two error paths (non-image input,
 particle-free input), polarity symmetry (bright vs. dark particles resolve
-to the same D_CV), original-resolution passthrough, the decompression-bomb
-pixel cap, the oversized-upload guard, and the HTTP endpoint.
+to the same D_CV), original-resolution passthrough, that the header-based
+pixel-cap check actually fires before cv2 decodes anything, and the HTTP
+endpoint (including its Content-Length and upload-size guards).
 
 ## Use it on your own problem
 
@@ -111,14 +113,25 @@ around it.
   the source; treat them as a starting point for your own optics, not a
   calibrated constant.
 - **No batching.** One image in, one result out.
-- **Untrusted-upload guards, not a full hardening job.** `api.py` caps
-  upload size at 10MB, read in 1MB chunks so an oversized upload is
-  rejected without ever buffering the whole thing, and `analyze_micrograph`
-  rejects decoded images over 50 megapixels before doing any resize/blur/
-  morphology on them — that also sets OpenCV's own `OPENCV_IO_MAX_IMAGE_PIXELS`
-  guard, so a small file that decompresses into a huge canvas can be
-  refused at decode time. None of this substitutes for auth or a rate
-  limit in front of the endpoint.
+- **Untrusted-upload guards, not a full hardening job.** Decompression
+  bombs (a small file that decodes to a huge canvas) are rejected by
+  `dcv_vision._peek_image_size`, which reads width/height from the raw
+  PNG/JPEG header bytes *before* `cv2.imdecode` runs — checking the
+  decoded array's shape is too late, since decoding it is the expensive
+  part. (`analyze_micrograph` also has a post-decode size check as a
+  fallback for formats the header parser doesn't recognize, but that one
+  can't stop the decode itself.) OpenCV's own
+  `OPENCV_IO_MAX_IMAGE_PIXELS` env var looked like it would help here too,
+  but it's latched at cv2's native-extension load time rather than at
+  first decode — setting it from Python after `import cv2` has run
+  anywhere in the process is a no-op, confirmed empirically, so this
+  library doesn't rely on it.
+  On the request side, `api.py` rejects on a declared `Content-Length`
+  over 10MB before Starlette parses the multipart body, and separately
+  caps how much its own handler buffers. Neither one is a substitute for a
+  body-size limit at the reverse proxy / platform level: a client that
+  omits `Content-Length` (chunked transfer-encoding) or simply lies about
+  it isn't caught by either.
 
 ## Built with
 

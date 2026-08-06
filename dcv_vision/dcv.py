@@ -8,6 +8,7 @@ silently changes what a previously-computed D_CV means.
 from __future__ import annotations
 
 import base64
+import struct
 
 import cv2
 import numpy as np
@@ -26,6 +27,36 @@ from dcv_vision.config import (
 
 class VisionAnalysisError(Exception):
     """Image decoded fine, but no particles could be detected in it."""
+
+
+def _peek_image_size(b: bytes) -> tuple[int, int] | None:
+    """(width, height) read straight from a PNG/JPEG header, no pixel decode.
+
+    Exists so a decompression-bomb upload (a small file whose declared
+    dimensions decode to a huge canvas) can be rejected before cv2.imdecode
+    allocates the full decoded array — checking dimensions on the decoded
+    array is too late, the memory's already spent by then. Returns None for
+    anything it doesn't recognize as PNG/JPEG; the caller falls back to the
+    post-decode MAX_IMAGE_PIXELS check for those.
+    """
+    if b[:8] == b"\x89PNG\r\n\x1a\n" and b[12:16] == b"IHDR":
+        return struct.unpack(">II", b[16:24])
+    if b[:2] == b"\xff\xd8":  # JPEG: walk markers to the SOF segment
+        i, n = 2, len(b)
+        while i + 9 < n:
+            if b[i] != 0xFF:
+                i += 1
+                continue
+            m = b[i + 1]
+            if m in (0xD8, 0x01) or 0xD0 <= m <= 0xD7:  # no length field
+                i += 2
+                continue
+            seg = struct.unpack(">H", b[i + 2 : i + 4])[0]
+            if 0xC0 <= m <= 0xCF and m not in (0xC4, 0xC8, 0xCC):  # SOF marker
+                h, w = struct.unpack(">HH", b[i + 5 : i + 9])
+                return w, h
+            i += 2 + seg
+    return None
 
 
 def _resize_long_edge(img: np.ndarray, target_px: int) -> np.ndarray:
@@ -53,7 +84,19 @@ def _segment(corrected: np.ndarray, open_kernel: np.ndarray) -> tuple[np.ndarray
     return final_mask, n_particles
 
 
+def _too_large_error(w: int, h: int) -> ValueError:
+    return ValueError(f"Image is too large ({w}x{h} = {w * h:,}px, max {MAX_IMAGE_PIXELS:,}px).")
+
+
 def analyze_micrograph(image_bytes: bytes) -> dict:
+    # Checked from the header alone, before cv2 touches the bytes at all —
+    # this is the actual defense against a decompression-bomb upload (a
+    # small file that decodes to a huge canvas). Checking dimensions after
+    # cv2.imdecode is too late: the full array is already allocated by then.
+    peeked = _peek_image_size(image_bytes)
+    if peeked is not None and peeked[0] * peeked[1] > MAX_IMAGE_PIXELS:
+        raise _too_large_error(*peeked)
+
     buf = np.frombuffer(image_bytes, dtype=np.uint8)
     img = cv2.imdecode(buf, cv2.IMREAD_GRAYSCALE)
     if img is None:
@@ -64,15 +107,12 @@ def analyze_micrograph(image_bytes: bytes) -> dict:
     # would be meaningless, so scale must be fixed before any kernel runs.
     orig_h, orig_w = img.shape[:2]
 
-    # Reject decompression-bomb-style images (a small file that decodes to a
-    # huge canvas) before resize/blur/morphology, which all scale with pixel
-    # count and would otherwise turn one oversized upload into a large CPU
-    # and memory spike.
+    # Fallback for formats _peek_image_size doesn't recognize (or a header
+    # that lied about its own dimensions) — the memory's already spent at
+    # this point, but this still stops the resize/blur/morphology below,
+    # which all scale with pixel count, from running on a huge array.
     if orig_h * orig_w > MAX_IMAGE_PIXELS:
-        raise ValueError(
-            f"Image is too large ({orig_w}x{orig_h} = {orig_h * orig_w:,}px, "
-            f"max {MAX_IMAGE_PIXELS:,}px)."
-        )
+        raise _too_large_error(orig_w, orig_h)
 
     resized = _resize_long_edge(img, RESIZE_LONG_EDGE_PX)
     blurred = cv2.GaussianBlur(resized, GAUSSIAN_KERNEL, 0)

@@ -5,6 +5,7 @@ files are used.
 """
 from __future__ import annotations
 
+import struct
 import sys
 from pathlib import Path
 
@@ -63,6 +64,16 @@ CLUSTERED_CENTERS = _grid_centers(640, 8, span=(0.55, 0.72))  # 64, packed in on
 def _extreme_bytes() -> bytes:
     """One of 64 grid cells nearly full, the rest empty — an extreme clustering case."""
     return _make_micrograph([(560, 560)], radius=35, size=640)
+
+
+def _fake_png_header(width: int, height: int) -> bytes:
+    """PNG signature + IHDR chunk only — enough for _peek_image_size to read
+    width/height, but not a decodable image (no IDAT). Lets a bomb-sized
+    declared resolution be tested without allocating real pixel data for it."""
+    sig = b"\x89PNG\r\n\x1a\n"
+    ihdr_data = struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0)
+    length = struct.pack(">I", len(ihdr_data))
+    return sig + length + b"IHDR" + ihdr_data
 
 
 # ---- tests ----------------------------------------------------------------
@@ -148,22 +159,68 @@ def t_original_resolution():
     check(r["original_height"] == 300, f"original_height={r['original_height']}")
 
 
-def t_pixel_cap_rejected():
-    from dcv_vision import analyze_micrograph
+def t_header_peek_matches_real_image():
+    """Sanity check that _peek_image_size actually parses PNG headers,
+    rather than the oversized-header test below passing vacuously because
+    it always returns None and everything falls through to the (working,
+    but too-late) post-decode check."""
+    from dcv_vision.dcv import _peek_image_size
+
+    dims = _peek_image_size(_make_micrograph(UNIFORM_CENTERS))  # 640x640 PNG
+    check(dims == (640, 640), f"_peek_image_size on a real 640x640 PNG: {dims}")
+
+
+def t_header_peek_blocks_before_decode():
+    """The actual defense against a decompression bomb: a bomb-sized image
+    must be rejected from the header alone, before cv2.imdecode ever runs
+    (checking the decoded array's shape is too late — decoding it is the
+    expensive part). Proven here by making cv2.imdecode raise if called at
+    all, using a fake header with no real pixel data behind it."""
+    import dcv_vision.dcv as dcv_module
     from dcv_vision.config import MAX_IMAGE_PIXELS
 
     side = int((MAX_IMAGE_PIXELS * 1.2) ** 0.5)  # comfortably over the cap
+    fake_bomb = _fake_png_header(side, side)
+
+    def _fail_if_called(*a, **kw):
+        raise AssertionError("cv2.imdecode must not be called for an oversized header")
+
+    original_imdecode = dcv_module.cv2.imdecode
+    dcv_module.cv2.imdecode = _fail_if_called
+    try:
+        try:
+            dcv_module.analyze_micrograph(fake_bomb)
+            check(False, f"{side}x{side} declared header should be rejected before decode")
+        except ValueError as e:
+            check("too large" in str(e), f"oversized-header error message: {e}")
+        except AssertionError as e:
+            check(False, str(e))
+    finally:
+        dcv_module.cv2.imdecode = original_imdecode
+
+
+def t_pixel_cap_rejected_real_image():
+    """End-to-end version with a real, fully decodable oversized PNG (as
+    opposed to the fake-header unit test above) — confirms the whole path
+    behaves the same way on genuine image bytes, not just a crafted header."""
+    from dcv_vision import analyze_micrograph
+    from dcv_vision.config import MAX_IMAGE_PIXELS
+
+    side = int((MAX_IMAGE_PIXELS * 1.2) ** 0.5)
     huge = np.full((side, side), 128, dtype=np.uint8)
     ok, buf = cv2.imencode(".png", huge)
     assert ok
     try:
         analyze_micrograph(buf.tobytes())
-        check(False, f"{side}x{side} image (> MAX_IMAGE_PIXELS) should be rejected before processing")
+        check(False, f"{side}x{side} real image (> MAX_IMAGE_PIXELS) should be rejected")
     except ValueError as e:
-        check("too large" in str(e), f"oversized-image error message: {e}")
+        check("too large" in str(e), f"oversized real-image error message: {e}")
 
 
-def t_oversized_upload_rejected():
+def t_oversized_content_length_rejected():
+    """A large enough upload carries a Content-Length header Starlette would
+    otherwise use to fully buffer the multipart body before the endpoint
+    even runs; the middleware in api.py checks that header first."""
     from fastapi.testclient import TestClient
 
     from api import app, MAX_UPLOAD_BYTES
@@ -174,7 +231,10 @@ def t_oversized_upload_rejected():
         "/analyze-microscope",
         files={"file": ("huge.png", oversized, "image/png")},
     )
-    check(resp.status_code == 400, f"upload over MAX_UPLOAD_BYTES returns 400: {resp.status_code}")
+    check(
+        resp.status_code == 413,
+        f"upload with Content-Length over MAX_UPLOAD_BYTES rejected before body parsing: {resp.status_code}",
+    )
 
 
 def t_endpoint_passthrough():
@@ -217,8 +277,10 @@ tests = [
     ("4b. error path (flat solid color -> 422-class)", t_error_blank_image),
     ("5. polarity symmetry (top-hat and black-hat both work)", t_polarity_symmetry),
     ("6. original resolution in response", t_original_resolution),
-    ("7. pixel cap rejects decompression-bomb-sized images", t_pixel_cap_rejected),
-    ("8. oversized upload rejected without buffering it all", t_oversized_upload_rejected),
+    ("7a. header peek matches a real image's dimensions", t_header_peek_matches_real_image),
+    ("7b. header peek blocks a bomb before cv2.imdecode runs", t_header_peek_blocks_before_decode),
+    ("7c. real oversized image rejected end-to-end", t_pixel_cap_rejected_real_image),
+    ("8. oversized Content-Length rejected before body parsing", t_oversized_content_length_rejected),
     ("9. endpoint passthrough", t_endpoint_passthrough),
 ]
 

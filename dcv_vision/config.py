@@ -5,20 +5,21 @@ D_CV computed with the old values — the two are no longer comparable.
 """
 from __future__ import annotations
 
-import os
-
-# Hard cap on decoded image size (width * height), checked immediately after
-# decode and before any resize/blur/morphology — those scale with pixel
-# count, so a huge image needs to be rejected before they run, not after.
-# 50 megapixels is generous for any real micrograph capture.
+# Hard cap on image size (width * height). Enforced twice: from the file
+# header alone before cv2 ever touches the bytes (dcv._peek_image_size),
+# and again on the decoded array's actual shape as a fallback for formats
+# the header parser doesn't recognize. 50 megapixels is generous for any
+# real micrograph capture.
 #
-# This also sets OpenCV's own decoder-side pixel-count guard so a hostile
-# upload (e.g. a small PNG that decompresses to a huge canvas) can be
-# refused by cv2.imdecode itself rather than fully decoding into memory
-# first. Must be set before the first cv2 decode call in the process, which
-# is guaranteed here since config.py is imported before dcv.py touches cv2.
+# OpenCV has its own OPENCV_IO_MAX_IMAGE_PIXELS env var for this, but it's
+# not used here: it's latched at cv2's native-extension load time, not at
+# first decode, so setting it from Python after `import cv2` has already
+# run anywhere in the process (including inside this package) is a no-op —
+# confirmed empirically, not just from the docs. Depending on it would also
+# make this library's safety contingent on import order in whatever
+# process embeds it, which isn't something a library should ask its caller
+# to get right.
 MAX_IMAGE_PIXELS = 50_000_000
-os.environ.setdefault("OPENCV_IO_MAX_IMAGE_PIXELS", str(MAX_IMAGE_PIXELS))
 
 # Long edge is locked to this value the moment an image enters the pipeline
 # (upscale or downscale). If input resolution varied run to run, every
