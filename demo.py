@@ -43,8 +43,8 @@ def main() -> None:
     uniform_img, uniform_bytes = _make_micrograph(_grid_centers(8, (0.07, 0.93)))
     clustered_img, clustered_bytes = _make_micrograph(_grid_centers(8, (0.55, 0.72)))
 
-    uniform_result = analyze_micrograph(uniform_bytes)
-    clustered_result = analyze_micrograph(clustered_bytes)
+    uniform_result = analyze_micrograph(uniform_bytes, particles="bright")
+    clustered_result = analyze_micrograph(clustered_bytes, particles="bright")
 
     print(f"uniform:   d_cv={uniform_result['d_cv']:.4f}  area_fraction={uniform_result['area_fraction']:.4f}")
     print(f"clustered: d_cv={clustered_result['d_cv']:.4f}  area_fraction={clustered_result['area_fraction']:.4f}")

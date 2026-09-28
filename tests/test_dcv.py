@@ -63,7 +63,7 @@ CLUSTERED_CENTERS = _grid_centers(640, 8, span=(0.55, 0.72))  # 64, packed in on
 
 def _extreme_bytes() -> bytes:
     """One of 64 grid cells nearly full, the rest empty — an extreme clustering case."""
-    return _make_micrograph([(560, 560)], radius=35, size=640)
+    return _make_micrograph([(490 + 20 * i, 490 + 20 * j) for i in range(4) for j in range(4)], radius=10, size=640)
 
 
 def _fake_png_header(width: int, height: int) -> bytes:
@@ -81,8 +81,8 @@ def _fake_png_header(width: int, height: int) -> bytes:
 def t_ordering():
     from dcv_vision import analyze_micrograph
 
-    r_uniform = analyze_micrograph(_make_micrograph(UNIFORM_CENTERS))
-    r_clustered = analyze_micrograph(_make_micrograph(CLUSTERED_CENTERS))
+    r_uniform = analyze_micrograph(_make_micrograph(UNIFORM_CENTERS), "bright")
+    r_clustered = analyze_micrograph(_make_micrograph(CLUSTERED_CENTERS), "bright")
     check(
         r_uniform["d_cv"] < r_clustered["d_cv"],
         f"D_CV(uniform)={r_uniform['d_cv']} < D_CV(clustered)={r_clustered['d_cv']}",
@@ -93,15 +93,15 @@ def t_determinism():
     from dcv_vision import analyze_micrograph
 
     img_bytes = _make_micrograph(CLUSTERED_CENTERS)
-    r1 = analyze_micrograph(img_bytes)
-    r2 = analyze_micrograph(img_bytes)
+    r1 = analyze_micrograph(img_bytes, "bright")
+    r2 = analyze_micrograph(img_bytes, "bright")
     check(r1["d_cv"] == r2["d_cv"], f"same image analyzed twice gives same d_cv: {r1['d_cv']} == {r2['d_cv']}")
 
 
 def t_scale_over_one():
     from dcv_vision import analyze_micrograph
 
-    r = analyze_micrograph(_extreme_bytes())
+    r = analyze_micrograph(_extreme_bytes(), "bright")
     check(r["d_cv"] > 1.0, f"extreme clustering gives d_cv={r['d_cv']} > 1.0 (not clipped)")
 
 
@@ -137,13 +137,13 @@ def t_error_blank_image():
 def t_polarity_symmetry():
     from dcv_vision import analyze_micrograph
 
-    bright = analyze_micrograph(_make_micrograph(CLUSTERED_CENTERS, bg=60, fg=220))
-    dark = analyze_micrograph(_make_micrograph(CLUSTERED_CENTERS, bg=220, fg=60))
+    bright = analyze_micrograph(_make_micrograph(CLUSTERED_CENTERS, bg=60, fg=220), "bright")
+    dark = analyze_micrograph(_make_micrograph(CLUSTERED_CENTERS, bg=220, fg=60), "dark")
 
     check(bright["polarity"] == "particles_bright", f"bright particles polarity={bright['polarity']}")
     check(dark["polarity"] == "particles_dark", f"dark particles polarity={dark['polarity']}")
     check(bright["area_fraction"] > 0.01, f"bright particles detected, area_fraction={bright['area_fraction']}")
-    check(dark["area_fraction"] > 0.01, f"dark particles detected (black-hat path), area_fraction={dark['area_fraction']}")
+    check(dark["area_fraction"] > 0.01, f"dark particles detected (dark polarity), area_fraction={dark['area_fraction']}")
     check(
         abs(bright["d_cv"] - dark["d_cv"]) < 0.05,
         f"d_cv is similar under brightness inversion: bright={bright['d_cv']} dark={dark['d_cv']}",
@@ -158,7 +158,7 @@ def t_original_resolution():
         cv2.circle(canvas, (int(cx * 500 / 300), cy), 8, 220, thickness=-1)
     ok, buf = cv2.imencode(".png", canvas)
     assert ok
-    r = analyze_micrograph(buf.tobytes())
+    r = analyze_micrograph(buf.tobytes(), "bright")
     check(r["original_width"] == 500, f"original_width={r['original_width']}")
     check(r["original_height"] == 300, f"original_height={r['original_height']}")
 
@@ -251,11 +251,14 @@ def t_endpoint_passthrough():
     resp = client.post(
         "/analyze-microscope",
         files={"file": ("micrograph.png", img_bytes, "image/png")},
+        data={"particles": "bright"},
     )
     check(resp.status_code == 200, f"endpoint returns 200: {resp.status_code} {resp.text[:200]}")
     body = resp.json()
     for key in (
         "d_cv",
+        "dcv_version",
+        "minority_phase",
         "area_fraction",
         "n_grid",
         "polarity",
@@ -285,7 +288,7 @@ tests = [
     ("3. scale check (d_cv > 1.0 allowed)", t_scale_over_one),
     ("4a. error path (non-image -> 400-class)", t_error_non_image),
     ("4b. error path (flat solid color -> 422-class)", t_error_blank_image),
-    ("5. polarity symmetry (top-hat and black-hat both work)", t_polarity_symmetry),
+    ("5. polarity symmetry (explicit bright and dark polarity)", t_polarity_symmetry),
     ("6. original resolution in response", t_original_resolution),
     ("7a. header peek matches a real image's dimensions", t_header_peek_matches_real_image),
     ("7b. header peek blocks a bomb before cv2.imdecode runs", t_header_peek_blocks_before_decode),
