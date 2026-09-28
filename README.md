@@ -1,133 +1,212 @@
 # dcv-vision
 
-**Turn a microscope photo into a versioned dispersion-uniformity number.**
+**Measure spatial dispersion from a microscope image.**
 
-A small OpenCV pipeline for the same thermal-interface-material project as
+A deterministic OpenCV pipeline that converts a PNG or JPEG micrograph into
+**D_CV**, a measure of how unevenly particles or voids are distributed across
+an 8 × 8 grid. Lower values mean more even coverage; higher values mean more
+spatial variation. Values can exceed 1.
+
+Use it as a Python function or through an optional local HTTP API. The core
+analysis has no database, network, or application-framework dependency. It
+was built for the same materials project as
 [formulation-bo](https://github.com/mthogeon0731/formulation-bo).
-It divides a micrograph into an 8 x 8 grid and measures how unevenly a phase
-is distributed. Low D_CV means similar coverage across cells; larger values
-mean more spatial variation. Values are not clipped at 1.
 
-![Synthetic uniform and clustered dispersion, input and detected](demo_dispersion.png)
+![Synthetic micrographs: uniform and clustered inputs with their detected masks](demo_dispersion.png)
 
-## Definition v2
+*The example above is generated from synthetic images, not research photos.*
 
-**v2 changes the scientific definition. Do not pool v1 and v2 values or
-compare them as if only the implementation changed.** Reanalyze original
-images with a consistent definition and particle polarity when migrating.
-Save dcv_version, minority_phase, and polarity alongside d_cv.
+[Quick start](#quick-start) · [Python API](#python-api) ·
+[HTTP API](#optional-http-api) · [D_CV definition](#how-d_cv-is-calculated) ·
+[Tests](#tests) · [Security](SECURITY.md)
 
-For each cell, let p_i be its particle area fraction. If overall particle
-coverage is at most 50%, use q_i = p_i; otherwise use q_i = 1 - p_i
-(the void fraction). The result is std(q_i, ddof=0) / mean(q_i), rounded
-to four decimals. The returned area_fraction always describes particles,
-even when minority_phase is "void".
+## What changed in v2
 
-This keeps dense samples from appearing uniformly dispersed merely because
-particle coverage is near saturation.
+Real-photo observations motivated changes to particle selection, large
+aggregate detection, and the handling of dense samples.
 
-## Processing
+| Area | Previous behavior | Definition v2 |
+|---|---|---|
+| Particle selection | Automatic bright/dark detection | Explicit `"dark"` or `"bright"`; default: `"dark"` |
+| Segmentation | Top-hat/black-hat background correction, then Otsu | Global Otsu after blur and polarity selection |
+| Image scale | Fixed 1024-pixel long edge | Supported scale-bar normalization, with fixed-size fallback |
+| Dense samples | Particle-fraction CV only | Void-fraction CV when particle coverage exceeds 50% |
+| Result metadata | No definition-version field | `dcv_version=2` and `minority_phase` |
 
-1. Check PNG/JPEG headers and resource limits before decoding.
-2. Remove red annotations in the lower-right corner. If a supported scale
-   bar is detected, normalize to 1024 / 960 pixels per micrometre.
-   **The bar is assumed to mean 100 um; its numeric label is not read.**
-   Otherwise resize the long edge to 1024 pixels.
-3. Blur, then reject images whose 99th-to-1st percentile grayscale contrast
-   is below 40.
-4. Use the caller's "dark" or "bright" particle selection and global
-   Otsu thresholding. v2 removes top-hat/black-hat background correction,
-   which could erase large aggregates.
-5. Clean the mask, calculate minority-phase quadrat CV, and return a
-   freshly encoded mask preview with maximum long edge 512 pixels.
+**v1 and v2 values are not directly interchangeable.** Reanalyze original
+images with the same definition and acquisition conditions before combining
+datasets. See [Migration from v1](#migration-from-v1) and the
+[changelog](CHANGELOG.md).
 
-Automatic particle polarity from v1 is no longer used. Omitting the new
-argument selects **dark particles**, so update callers that used bright
-particles explicitly.
+## Quick start
 
-## Try it
+Requires **Python 3.12 or later** for the pinned dependencies.
 
-Python **3.12 or later** is required by the pinned dependency set.
-
-~~~bash
+```bash
 git clone https://github.com/mthogeon0731/dcv-vision
 cd dcv-vision
 python -m venv .venv
-# Activate .venv using your platform's usual command.
+```
+
+Activate the environment for your platform:
+
+| Platform | Command |
+|---|---|
+| Windows PowerShell | `.\.venv\Scripts\Activate.ps1` |
+| macOS / Linux | `source .venv/bin/activate` |
+
+Then install and run the synthetic demo:
+
+```bash
 python -m pip install -r requirements.txt
 python demo.py
-~~~
+```
 
-The demo generates synthetic images in code and overwrites
-demo_dispersion.png. With the pinned versions, its results are approximately
-0.0031 for uniform particles and 3.9167 for clustered particles.
-These are demonstration fixtures, not real-photo validation statistics.
+The demo writes `demo_dispersion.png`. With the pinned versions:
 
-~~~python
+| Synthetic fixture | D_CV |
+|---|---:|
+| Uniform particle placement | ≈ 0.0031 |
+| Clustered particle placement | ≈ 3.9167 |
+
+These numbers illustrate the metric; they are not real-photo accuracy results.
+
+## Python API
+
+```python
+from pathlib import Path
 from dcv_vision import analyze_micrograph
 
-with open("micrograph.jpg", "rb") as image:
-    result = analyze_micrograph(image.read(), particles="dark")
+result = analyze_micrograph(
+    Path("micrograph.jpg").read_bytes(),
+    particles="dark",
+)
 
-print(result["d_cv"], result["dcv_version"], result["minority_phase"])
-~~~
+print(result["d_cv"])
+print(result["dcv_version"], result["minority_phase"], result["polarity"])
+```
 
-The pure function reads bytes and returns a dictionary. It has no network,
-database, or application-framework dependency. It returns:
+Choose `particles="dark"` for dark particles on a brighter background, or
+`particles="bright"` for bright particles on a darker background. There is
+no automatic polarity mode.
 
-- d_cv, dcv_version, area_fraction, n_grid, minority_phase
-- polarity, polarity_evidence
-- processed_image_base64 (JPEG mask preview)
-- original_width, original_height
+| Result field | Meaning |
+|---|---|
+| `d_cv` | Quadrat coefficient of variation, rounded to four decimals |
+| `dcv_version` | Measurement definition; currently `2` |
+| `minority_phase` | `"particle"` or `"void"`: the phase used to calculate CV |
+| `area_fraction` | Overall **particle** coverage, even when the metric uses voids |
+| `n_grid` | Grid size per side; currently `8` |
+| `polarity` / `polarity_evidence` | Selected particle polarity and a readable explanation |
+| `processed_image_base64` | Base64-encoded JPEG mask preview, maximum long edge 512 px |
+| `original_width` / `original_height` | Input image dimensions in pixels |
 
-## Optional HTTP demo
+The function returns a dictionary without storing the input or result.
+It raises `ValueError` for invalid input and `VisionAnalysisError` when
+meaningful particles cannot be detected.
 
-~~~bash
+## Optional HTTP API
+
+Start the local server:
+
+```bash
 uvicorn api:app --host 127.0.0.1
+```
+
+In another terminal, send a multipart request:
+
+```bash
 curl -F "file=@micrograph.jpg" -F "particles=dark" http://127.0.0.1:8000/analyze-microscope
-~~~
+```
 
-The endpoint is stateless and has no authentication or rate limiting.
-Use it locally or behind your own access controls. The framework may
-temporarily spool uploads to disk; the application does not persist images
-or results. See [SECURITY.md](SECURITY.md) for limits and deployment guidance.
+On Windows PowerShell, use `curl.exe` if `curl` resolves to a PowerShell alias.
+The response contains the same fields as the Python API.
 
-Invalid image input or polarity returns 400; low-contrast/no-particle images
-return 422; requests exceeding the total body limit return 413. A missing
-required file is a framework validation error (422).
+| Status | Meaning |
+|---|---|
+| `200` | Analysis completed |
+| `400` | Invalid image input or particle polarity |
+| `413` | Total request body exceeds 10 MiB, including multipart overhead |
+| `422` | Low-contrast/no-particle image, or a missing required file |
+
+The wrapper is intended for **local or trusted use**. It has no authentication
+or rate limiting. The framework may temporarily spool uploads to disk; the
+application does not persist images or results. Deployment requirements and
+the limits of image-input protections are documented in [SECURITY.md](SECURITY.md).
+
+## How D_CV is calculated
+
+For each grid cell, let `p_i` be the particle area fraction. Select the phase
+using the overall particle coverage:
+
+- Coverage **≤ 50%**: `q_i = p_i`, measuring particle fractions.
+- Coverage **> 50%**: `q_i = 1 - p_i`, measuring void fractions.
+
+```text
+D_CV = std(q_i, ddof=0) / mean(q_i)
+```
+
+The calculation uses population standard deviation and does not clip the
+result at 1. The implementation returns 0 if the selected phase has zero
+mean coverage. Always inspect the mask when interpreting a measurement.
+
+Using the minority phase makes the metric more sensitive to uneven empty
+regions in dense samples, where particle fractions can approach saturation.
+
+### Image processing
+
+1. **Validate:** check PNG/JPEG headers and input resource limits.
+2. **Normalize scale:** remove lower-right red annotations and use a
+   supported scale bar; otherwise resize the long edge to 1024 px.
+3. **Check contrast:** apply Gaussian blur and reject images with a
+   99th-to-1st percentile grayscale range below 40.
+4. **Segment:** apply global Otsu using the selected particle polarity.
+5. **Clean and measure:** apply morphological opening, remove small
+   components, and calculate the grid statistic.
+
+### Acquisition assumptions
+
+- **Scale bar:** a red bar in the bottom 15% and rightmost 40% of the image,
+  assumed to represent **100 µm**. Its numeric label is not read.
+  Normalization targets `1024 / 960` pixels per µm.
+- **Sampling:** consistent magnification, field of view, and sampling protocol
+  are still needed. Pixel normalization does not make different physical
+  grid-cell sizes interchangeable.
+- **Segmentation:** one grayscale particle phase with adequate contrast.
+  Uneven illumination or multiple phases can invalidate global Otsu results.
+- **Cleanup:** the 3-pixel opening and 20-pixel minimum component area remain
+  provisional settings for a reference capture setup. Validate masks for
+  your own optics.
+
+No reproducible real-photo benchmark is included, and this repository makes
+no accuracy or correlation claim for real samples.
+
+## Migration from v1
+
+1. Pass particle polarity explicitly, especially `particles="bright"` for
+   bright-particle images; omitted polarity now means dark particles.
+2. Save `dcv_version`, `minority_phase`, and `polarity` with each measurement.
+3. Reanalyze original images before pooling previous and new results.
+4. Recheck masks and update downstream thresholds or models for the new
+   definition rather than assuming old numerical cutoffs still apply.
 
 ## Tests
 
-~~~bash
+```bash
 python -m pip install -r requirements-dev.txt
 python tests/test_dcv.py
 python tests/test_v2_security.py
-~~~
+```
 
-All fixtures are generated in memory. Tests cover ordering, determinism,
-brightness inversion with explicit polarity, high-density void CV, large
-aggregates, scale-bar normalization, fallback resizing, low contrast, image
-and request size guards, malformed input, and source-metadata exclusion
-from previews. No private micrographs are distributed.
+The suite contains 12 baseline scenarios and 27 additional regression tests.
+Fixtures are generated in memory and cover measurement ordering, determinism,
+explicit polarity, dense samples, large aggregates, scale-bar behavior,
+malformed images, resource limits, HTTP body limits, and metadata exclusion
+from result previews.
 
-## Scientific limits
-
-- Single grayscale particle phase; no colour or multi-phase segmentation.
-- Scale-bar detection only supports a red bar in the lower-right region
-  (bottom 15%, rightmost 40%) representing **100 um**. Other bar lengths or
-  annotation styles require adaptation and validation.
-- Pixel-scale normalization does not make different fields of view or grid
-  cell sizes scientifically interchangeable. Keep acquisition and sampling
-  conditions consistent.
-- Global Otsu assumes adequate foreground/background separation. Uneven
-  illumination and low contrast can invalidate segmentation; inspect masks.
-- The 3-pixel opening and 20-pixel minimum component area remain provisional.
-  Parameters reflect one reference capture setup, not universal calibration.
-- Real-photo observations motivated v2, but no reproducible real-photo
-  benchmark is included. No accuracy or correlation claim is made here.
-- One image per call; v1 callers should migrate explicitly. See
-  [CHANGELOG.md](CHANGELOG.md).
+The pinned environment was verified on Windows with Python 3.12. Other
+operating systems have not been execution-tested for this update.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+[MIT](LICENSE).
