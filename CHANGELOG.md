@@ -20,6 +20,9 @@ This is a measurement-definition change, not a drop-in numerical update.
 - Avoid repeated whole-image scans during component filtering.
 - Update synthetic examples, tests, and dependency pins. The pinned NumPy
   version requires Python 3.12 or newer.
+- Document the real-micrograph check behind v2 in the README: process,
+  results on 13 photos, and an open global-Otsu segmentation failure under
+  uneven illumination. No code or definition change.
 
 ### Migration
 

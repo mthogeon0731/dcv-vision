@@ -41,6 +41,10 @@ Do not commit original research images, credential files, logs, local
 environments, or generated audit reports. Review the actual staged file list
 and diff before publishing; ignore patterns alone are not a security boundary.
 
+The two micrographs in the README's real-micrograph figure are an exception
+approved by the repository owner. They are downscaled, re-encoded copies
+that carry no source filename or metadata.
+
 To review dependencies and Python source independently:
 
 ~~~bash

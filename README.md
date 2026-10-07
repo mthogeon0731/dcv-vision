@@ -18,12 +18,15 @@ was built for the same materials project as
 
 [Quick start](#quick-start) · [Python API](#python-api) ·
 [HTTP API](#optional-http-api) · [D_CV definition](#how-d_cv-is-calculated) ·
-[Tests](#tests) · [Security](SECURITY.md)
+[Real-micrograph check](#real-micrograph-check) · [Tests](#tests) ·
+[Security](SECURITY.md)
 
 ## What changed in v2
 
 Real-photo observations motivated changes to particle selection, large
-aggregate detection, and the handling of dense samples.
+aggregate detection, and the handling of dense samples. The
+[real-micrograph check](#real-micrograph-check) records those observations,
+including a segmentation failure under uneven illumination that v2 still has.
 
 | Area | Previous behavior | Definition v2 |
 |---|---|---|
@@ -174,12 +177,165 @@ regions in dense samples, where particle fractions can approach saturation.
   grid-cell sizes interchangeable.
 - **Segmentation:** one grayscale particle phase with adequate contrast.
   Uneven illumination or multiple phases can invalidate global Otsu results.
+  This happened on three real frames; see
+  [Open failure: uneven illumination](#open-failure-uneven-illumination).
 - **Cleanup:** the 3-pixel opening and 20-pixel minimum component area remain
   provisional settings for a reference capture setup. Validate masks for
   your own optics.
 
-No reproducible real-photo benchmark is included, and this repository makes
-no accuracy or correlation claim for real samples.
+## Real-micrograph check
+
+The v2 changes came from running the pipeline on 19 real optical micrographs
+and comparing its masks and numbers with what an observer saw in the photos.
+This section records the process, the results, and one failure that is still
+open.
+
+Two of the photographs are shown below as downscaled copies. The other 17
+are not included in this repository (see [SECURITY.md](SECURITY.md)), so
+these numbers cannot be regenerated from it. Read them as the record of a
+small check, not as a benchmark or an accuracy claim.
+
+### Photos and reference judgments
+
+- **Format:** 19 JPEG exports, 2048 × 1536 px, each with the microscope
+  software's red 100 µm scale bar in the lower-right corner.
+- **Magnifications:** three, told apart by the length of that bar: 128–130 px
+  (13 photos), 233–234 px (5 photos), and 436 px (1 photo).
+- **Comparison set:** the 13 photos at the lowest magnification, numbered
+  7–19 below. They show dark particles in a brighter matrix. The field of
+  view is about 1.59 × 1.19 mm, so one cell of the 8 × 8 grid covers about
+  198 × 149 µm.
+- **Other frames:** one empty field (photo 3), used to test rejection, and
+  five frames at the two higher magnifications with no visual reference.
+
+One observer gave two judgments by eye:
+
+1. An ordering of the 13 photos by how much particle they contain.
+2. Photo 16 contains one large aggregate and is the most clustered of the set.
+
+The observer also agreed with the order that an intermediate pipeline
+proposed for the remaining photos, within groups of similar particle amount.
+Agreeing with a suggested order is weaker evidence than ranking
+independently, so that agreement is not used as a score below.
+
+Correlations below are Spearman rank correlations (ρ) against the first
+judgment.
+
+### Step 1: the previous pipeline (v1)
+
+| Check | Result |
+|---|---|
+| Empty field | Returned D_CV = 6.90 at area fraction 0.001. The only detected "particle" was the red scale bar. |
+| Polarity | 9 of the 13 photos were classified as bright particles, so the matrix was measured instead of the particles. That covers all eight of the fullest frames and one of the five sparsest. |
+| Particle amount | Area fraction ran against the observer's ordering (ρ = −0.46). |
+| Magnification | All three magnifications were resized to the same pixel width, so pixel-sized kernels covered different physical lengths. |
+
+### Step 2: an intermediate pipeline (never published)
+
+This attempt kept background correction and changed four things:
+
+- The caller states the particle polarity.
+- The red overlay is inpainted away, and its length rescales the image to
+  `1024 / 960` pixels per µm.
+- A contrast gate rejects empty fields.
+- The black-hat kernel grows from 51 px to 201 px (188 µm at the normalized
+  scale), because 51 px hollowed out anything larger than a single particle.
+
+Results:
+
+- The empty field was rejected, and area fraction followed the observer's
+  ordering (ρ = +0.91).
+- D_CV correlated with the same ordering at ρ = −0.94. That is not evidence
+  about dispersion. It shows that particle-fraction CV shrinks as a frame
+  fills up.
+- Photo 16, the frame judged most clustered, received the fifth-lowest D_CV
+  of the 13 (0.214). Its aggregate is wider than the kernel, so the interior
+  was removed from the mask as background (figure, top middle).
+
+### Step 3: definition v2
+
+- **Global Otsu** replaces background correction and keeps the aggregate in
+  the mask (figure, top right).
+- **Minority-phase CV** restores sensitivity in full frames, where particle
+  fraction is close to its upper bound and has little room to vary. On the
+  v2 masks of the five fullest frames, particle-fraction CV is 0.177 for
+  photo 16 against 0.107–0.159 for the other four. Void-fraction CV is 0.673
+  against 0.435–0.564.
+
+![Two real micrographs with their masks under background correction and under v2](real_micrograph_check.jpg)
+
+*Two of the real micrographs (left, downscaled) with their binary masks under
+background correction (middle) and under v2 (right). White is detected
+particle, and the green lines are the 8 × 8 grid. Top: the frame with a
+large aggregate. Bottom: a sparse frame with uneven illumination.*
+
+### v2 results on the comparison set
+
+Rows are in the observer's particle-amount order, least to most. The last
+column comes from viewing each mask beside its photo at reduced size. It is
+not one of the observer's judgments.
+
+| Photo | Particle area fraction | Phase used | D_CV | Mask against the photo |
+|---:|---:|---|---:|---|
+| 7 | 0.50 | void | 0.592 | Wrong: darker side of the frame marked as particle |
+| 8 | 0.48 | particle | 0.453 | Wrong: same failure |
+| 9 | 0.55 | void | 0.453 | Wrong: same failure |
+| 11 | 0.43 | particle | 0.408 | Follows the particles |
+| 15 | 0.44 | particle | 0.321 | Follows the particles |
+| 19 | 0.57 | void | 0.329 | Follows the particles |
+| 10 | 0.58 | void | 0.339 | Follows the particles |
+| 12 | 0.58 | void | 0.340 | Follows the particles |
+| 17 | 0.73 | void | 0.435 | Follows the particles |
+| 14 | 0.79 | void | 0.485 | Follows the particles |
+| 13 | 0.84 | void | 0.564 | Follows the particles |
+| 16 | 0.79 | void | 0.673 | Follows the particles; aggregate retained |
+| 18 | 0.78 | void | 0.481 | Follows the particles |
+
+### What the check supports
+
+- **Particle labelling.** Area fraction now describes the particles. It
+  follows the observer's ordering at ρ = +0.87 across all 13 photos, and at
+  ρ = +0.90 across the ten whose masks follow the particles.
+- **Empty-field rejection.** The empty field has a 99th-to-1st percentile
+  range of 30, below the gate of 40. The lowest value among the other 18
+  frames is 55.
+- **Large aggregates.** The aggregate stays in the mask, and photo 16 has the
+  highest D_CV of the 13.
+- **Scale-bar detection.** The bar was found in all 19 frames and separated
+  the three magnifications.
+
+### Open failure: uneven illumination
+
+Photos 7–9 are the three sparsest frames, and each has a visible brightness
+gradient across the field. Global Otsu assigns the darker side of the frame
+to the particle class (figure, bottom right). In photo 7 the right third of
+the frame is 84% "particle", against 26% with background correction, and the
+overall area fraction rises from 0.26 to 0.50. The v2 D_CV values for these
+three frames describe the lighting, not the particles.
+
+Background correction segments these frames correctly but hollows out large
+aggregates. Global Otsu does the reverse. Neither is correct on all 13
+photos, and v2 does not yet resolve this. Until it does, use evenly lit
+frames and inspect every mask before using its number.
+
+### What the check does not establish
+
+- **Sensitivity to dispersion.** Photo 16 is the only independent visual
+  judgment of clustering. Whether D_CV separates samples with the same
+  particle amount but different dispersion is untested.
+- **Comparability across particle amounts.** D_CV depends on coverage, and the
+  phase rule switches at 50%. Compare frames only at similar coverage.
+- **Repeatability.** The check has one observer, 13 photos, one
+  magnification, and no repeat fields of a single sample.
+- **A large numerical change from v1 at this magnification.** On the 13
+  photos, v2 D_CV stays close to v1 D_CV (ρ = +0.95, median absolute
+  difference 0.026, maximum 0.077), because v1's automatic polarity usually
+  picked the thinner phase, which v2 now selects by rule. At the other two
+  magnifications the difference reaches 0.30, so the two definitions remain
+  non-interchangeable.
+- **A strong effect of `particles` on D_CV.** Swapping the polarity changes
+  D_CV by at most 0.019 on the 18 analyzable frames. It mainly changes
+  `area_fraction` and `minority_phase`.
 
 ## Migration from v1
 
