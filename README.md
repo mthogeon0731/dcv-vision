@@ -190,21 +190,21 @@ and comparing its masks and numbers with what an observer saw in the photos.
 This section records the process, the results, and one failure that is still
 open.
 
-The photographs are not included in this repository (see
-[SECURITY.md](SECURITY.md)), so these numbers cannot be regenerated from it.
-Read them as the record of a small check, not as a benchmark or an accuracy
-claim.
+Two of the photographs are shown below as downscaled copies. The other 17
+are not included in this repository (see [SECURITY.md](SECURITY.md)), so
+these numbers cannot be regenerated from it. Read them as the record of a
+small check, not as a benchmark or an accuracy claim.
 
 ### Photos and reference judgments
 
-- **Format:** 19 JPEG exports, 2000 × 1500 px, each with the microscope
+- **Format:** 19 JPEG exports, 2048 × 1536 px, each with the microscope
   software's red 100 µm scale bar in the lower-right corner.
 - **Magnifications:** three, told apart by the length of that bar: 128–130 px
   (13 photos), 233–234 px (5 photos), and 436 px (1 photo).
 - **Comparison set:** the 13 photos at the lowest magnification, numbered
   7–19 below. They show dark particles in a brighter matrix. The field of
-  view is about 1.55 × 1.16 mm, so one cell of the 8 × 8 grid covers about
-  194 × 145 µm.
+  view is about 1.59 × 1.19 mm, so one cell of the 8 × 8 grid covers about
+  198 × 149 µm.
 - **Other frames:** one empty field (photo 3), used to test rejection, and
   five frames at the two higher magnifications with no visual reference.
 
@@ -250,7 +250,7 @@ Results:
   fills up.
 - Photo 16, the frame judged most clustered, received the fifth-lowest D_CV
   of the 13 (0.214). Its aggregate is wider than the kernel, so the interior
-  was removed from the mask as background (figure, top left).
+  was removed from the mask as background (figure, top middle).
 
 ### Step 3: definition v2
 
@@ -262,12 +262,12 @@ Results:
   photo 16 against 0.107–0.159 for the other four. Void-fraction CV is 0.673
   against 0.435–0.564.
 
-![Binary masks from two real micrographs under background correction and under v2](real_micrograph_masks.png)
+![Two real micrographs with their masks under background correction and under v2](real_micrograph_check.jpg)
 
-*Binary masks computed from two of the real micrographs. White is detected
+*Two of the real micrographs (left, downscaled) with their binary masks under
+background correction (middle) and under v2 (right). White is detected
 particle, and the green lines are the 8 × 8 grid. Top: the frame with a
-large aggregate. Bottom: a sparse frame with uneven illumination. The
-photographs themselves are not published.*
+large aggregate. Bottom: a sparse frame with uneven illumination.*
 
 ### v2 results on the comparison set
 
